@@ -40,14 +40,14 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	    
 		if (threadIdx.y == 0){
 		  if (Col < BCols){
-			BiasRow[threadIdx.x] = blockIdx.x;
+			BiasRow[threadIdx.x] = B[Col];
 		  }else{
 		  	BiasRow[threadIdx.x] = 0.0;
 			}
 			}
 	    __syncthreads();
 		
-		CValue = 78;//BiasRow[threadIdx.x];
+		CValue = BiasRow[threadIdx.x];
 		
 		__syncthreads();
 		
@@ -55,7 +55,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	
     if (Row < CRows && Col < CCols) 
         C[((blockIdx.y * blockDim.y + threadIdx.y) * CCols) + 
-            (blockIdx.x * blockDim.x) + threadIdx.x] = 17; //CValue;
+            (blockIdx.x * blockDim.x) + threadIdx.x] = CValue;
 }
 
 
