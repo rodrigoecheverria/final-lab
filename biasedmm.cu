@@ -81,7 +81,7 @@ int main(int argc, char *argv[])
     cudaMemcpy(d_B,	B, N * (N + 1) * sizeof(float), cudaMemcpyHostToDevice);
     
     dim3 dimBlock(TILE_DIM, TILE_DIM);
-    dim3 dimGrid(N / dimBlock.x, N / dimBlock.y);
+    dim3 dimGrid((N + dimBlock.x -1) / dimBlock.x, (N  + dimBlock.y -1) / dimBlock.y);
 	if (argc > 1)
 		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,true);
 	else
