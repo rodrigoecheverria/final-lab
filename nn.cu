@@ -7,26 +7,25 @@
 
 //TRY TO PUT A SIGMOID FUNCTOR HERE !!!!
 __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols, 
-    int BRows, int BCols, int CRows, int CCols) 
+    int BRows, int BCols, int CRows, int CCols, bool addBias) 
 {
     float CValue = 0;
     int Row = blockIdx.y * TILE_DIM + threadIdx.y;
     int Col = blockIdx.x * TILE_DIM + threadIdx.x;
-
+    int biasOffset = addBias ? 1 : 0; 
+	
     __shared__ float As[TILE_DIM][TILE_DIM];
     __shared__ float Bs[TILE_DIM][TILE_DIM];
 
-    for (int k = 0; k < (TILE_DIM + ACols - 1)/TILE_DIM; k++)
+    for (int k = 0; k < (TILE_DIM + ACols - 1)/TILE_DIM; k++)           //floor(ACols/TILE_DIM)
     {
          if (k * TILE_DIM + threadIdx.x < ACols && Row < ARows)   
-            As[threadIdx.y][threadIdx.x] = 
-                A[Row * ACols + k * TILE_DIM + threadIdx.x];
+            As[threadIdx.y][threadIdx.x] = A[Row * ACols + k * TILE_DIM + threadIdx.x];
          else                                                 
             As[threadIdx.y][threadIdx.x] = 0.0;
 
          if (k * TILE_DIM + threadIdx.y < BRows && Col < BCols)   
-            Bs[threadIdx.y][threadIdx.x] = 
-                B[(k * TILE_DIM + threadIdx.y) * BCols + Col];
+            Bs[threadIdx.y][threadIdx.x] = B[(k * TILE_DIM + threadIdx.y + biasOffset) * BCols + Col]; //+1 one row if bias
          else      
             Bs[threadIdx.y][threadIdx.x] = 0.0;
 
@@ -37,7 +36,20 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 
          __syncthreads();
     }
-
+    if (addBias)
+	{
+		__shared__ float BiasRow[TILE_DIM];
+	    
+		if ((threadIdx.y == 0) && (Col < BCols)) 
+			BiasRow[threadIdx.x] = B[Col];
+			
+	    __syncthreads();
+		
+		CValue += BiasRow[threadIdx.x];
+		
+		__syncthreads();
+	}
+	
     if (Row < CRows && Col < CCols) 
         C[((blockIdx.y * blockDim.y + threadIdx.y) * CCols) + 
             (blockIdx.x * blockDim.x) + threadIdx.x] = CValue;
@@ -90,12 +102,12 @@ int main(int argc, char *argv[])
                 options.layerSizes.back() * sizeof(float));
 	for (i = 0; i < options.numberOfLayers - 1; i++)
 	{
-	    Theta[i] =  (float *) malloc (sizeof(float) * options.layerSizes[i] * 
-	                    options.layerSizes[i+1]);
+	    Theta[i] =  (float *) malloc (sizeof(float) * (options.layerSizes[i] + 1) * 
+	                    options.layerSizes[i+1]); //+1 is the bias row
 	    if (Theta[i] == NULL)
 	        printf ("MALLOC ERROR\n");                
-        err = cudaMalloc((void **)&(d_Theta[i]), options.layerSizes[i] * 
-                options.layerSizes[i+1] * sizeof(float));
+        err = cudaMalloc((void **)&(d_Theta[i]), (options.layerSizes[i] + 1) * 
+                options.layerSizes[i+1] * sizeof(float)); //+1 is the bias row
         if (err > 0) printf("error code: %d\n",err);
     }
     
@@ -119,8 +131,8 @@ int main(int argc, char *argv[])
 	readResultsIntoMatrix(options.resultsFile, Y, options.numberOfTrainingSamples, 
                             options.layerSizes.back());
     for (i = 0; i < options.numberOfLayers - 1; i++){
-	   printf ("Filling Theta[%d] of size (%d,%d)\n",i, options.layerSizes[i],options.layerSizes[i+1]);
-        GPU_fill_rand(d_Theta[i], options.layerSizes[i],
+	   printf ("Filling Theta[%d] of size (%d,%d)\n",i, options.layerSizes[i] + 1,options.layerSizes[i+1]);
+        GPU_fill_rand(d_Theta[i], options.layerSizes[i] + 1,
                         options.layerSizes[i+1]);
     }
 	
@@ -160,9 +172,10 @@ int main(int argc, char *argv[])
     cudaThreadSynchronize();
     }
     
+	
+	
     cudaMemcpy(Theta[0], d_Theta[0], options.layerSizes[0] * options.layerSizes[1] * sizeof(float), cudaMemcpyDeviceToHost);
-     cudaMemcpy(Theta[1], d_Theta[1], options.layerSizes[1] * options.layerSizes[2] * sizeof(float), cudaMemcpyDeviceToHost);
-    
+    cudaMemcpy(Theta[1], d_Theta[1], options.layerSizes[1] * options.layerSizes[2] * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(a[0], d_a[0], options.numberOfTrainingSamples * options.layerSizes[0] * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(a[1], d_a[1], options.numberOfTrainingSamples * options.layerSizes[1] * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(a[2], d_a[2], options.numberOfTrainingSamples * options.layerSizes[2] * sizeof(float), cudaMemcpyDeviceToHost);
