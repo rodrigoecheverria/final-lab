@@ -85,12 +85,9 @@ int main(int argc, char *argv[])
 	d_Theta = (float **) malloc ((options.numberOfLayers - 1) * sizeof(float*)); // points to device memory
 	a = (float **) malloc (options.numberOfLayers * sizeof(float*));
 	d_a = (float **) malloc (options.numberOfLayers * sizeof(float*));
-	                      
-    /*cudaMalloc((void **) &d_X, options.numberOfTrainingSamples * 
-                options.layerSizes[0] * sizeof(float));*/
+	
     cudaMalloc((void **) &d_Y, options.numberOfTrainingSamples * 
                 options.layerSizes.back() * sizeof(float));
-	
 	for (i = 0; i < options.numberOfLayers - 1; i++)
 	{
 	    Theta[i] =  (float *) malloc (sizeof(float) * options.layerSizes[i] * 
@@ -119,10 +116,8 @@ int main(int argc, char *argv[])
 	//==========================================================================
 	readCsvIntoMatrix(options.samplesFile, X, options.numberOfTrainingSamples, 
                         options.layerSizes[0]);
-    
-    /*Let use Y as output for test for now
 	readResultsIntoMatrix(options.resultsFile, Y, options.numberOfTrainingSamples, 
-                            options.layerSizes.back());*/
+                            options.layerSizes.back());
     for (i = 0; i < options.numberOfLayers - 1; i++){
 	   printf ("Filling Theta[%d] of size (%d,%d)\n",i, options.layerSizes[i],options.layerSizes[i+1]);
         GPU_fill_rand(d_Theta[i], options.layerSizes[i],
@@ -172,11 +167,14 @@ int main(int argc, char *argv[])
     cudaMemcpy(a[1], d_a[1], options.numberOfTrainingSamples * options.layerSizes[1] * sizeof(float), cudaMemcpyDeviceToHost);
     cudaMemcpy(a[2], d_a[2], options.numberOfTrainingSamples * options.layerSizes[2] * sizeof(float), cudaMemcpyDeviceToHost);
     
-    printMatrix(Theta[0], options.layerSizes[0], options.layerSizes[1]);
-    printMatrix(Theta[1], options.layerSizes[1], options.layerSizes[2]);
+    
+    
 	printMatrix(a[0], options.numberOfTrainingSamples, options.layerSizes[0]);
+	printMatrix(Theta[0], options.layerSizes[0], options.layerSizes[1]);
 	printMatrix(a[1], options.numberOfTrainingSamples, options.layerSizes[1]);
+	printMatrix(Theta[1], options.layerSizes[1], options.layerSizes[2]);
 	printMatrix(a[2], options.numberOfTrainingSamples, options.layerSizes[2]);
+	printMatrix(Y,options.numberOfTrainingSamples,options.layerSizes.back());
 	
 	//    cudaFree(d_X); cudaFree(d_B); cudaFree(d_C);    
 	return 0;
