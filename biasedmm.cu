@@ -44,7 +44,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 			BiasRow[threadIdx.x] = 0.0;
 	    __syncthreads();
 		
-		CValue += BiasRow[threadIdx.x];
+		CValue = BiasRow[threadIdx.x];
 		
 		__syncthreads();
 		
@@ -90,8 +90,8 @@ int main(int argc, char *argv[])
     
     for (i = 0; i < N * N; i++)
     {
+			if ((i % N) == 0) printf("\n");
 			printf("%f, ",C[i]);
-			if (i % N == 0) printf("\n");
     }
     return 0;
     
