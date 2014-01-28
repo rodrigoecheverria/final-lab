@@ -39,7 +39,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 		__shared__ float BiasRow[TILE_DIM];
 	    
 		if (threadIdx.y == 0)
-		  if (Col < BCols)) 
+		  if (Col < BCols)
 			BiasRow[threadIdx.x] = B[Col];
 		  else
 		  	BiasRow[threadIdx.x] = 0.0;
