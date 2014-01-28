@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <cuda.h>
 #define TILE_DIM 16
 
