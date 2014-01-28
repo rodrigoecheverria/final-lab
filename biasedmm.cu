@@ -47,7 +47,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 			}
 	    __syncthreads();
 		
-		CValue = BiasRow[threadIdx.x];
+		CValue = 78;//BiasRow[threadIdx.x];
 		
 		__syncthreads();
 		
