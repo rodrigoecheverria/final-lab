@@ -36,8 +36,6 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
     }
     if (addBias)
 	{
-		CValue += 1.0;
-		/*
 		__shared__ float BiasRow[TILE_DIM];
 	    
 		if ((threadIdx.y == 0) && (Col < BCols)) 
@@ -48,7 +46,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 		CValue += BiasRow[threadIdx.x];
 		
 		__syncthreads();
-		*/
+		
 	}
 	
     if (Row < CRows && Col < CCols) 
