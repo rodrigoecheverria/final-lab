@@ -12,5 +12,6 @@
 *.la
 *.a
 
-# Data files
-*.csv
+# Restricted Data files
+data.csv
+datay.csv
