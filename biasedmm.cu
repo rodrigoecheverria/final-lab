@@ -44,6 +44,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 		  }else{
 		  	BiasRow[threadIdx.x] = 0.0;
 			}
+			}
 	    __syncthreads();
 		
 		CValue = BiasRow[threadIdx.x];
