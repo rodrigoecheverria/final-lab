@@ -40,7 +40,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	    
 		if (threadIdx.y == 0){
 		  if (Col < BCols){
-			BiasRow[threadIdx.x] = Col;
+			BiasRow[threadIdx.x] = blockIdx.x;
 		  }else{
 		  	BiasRow[threadIdx.x] = 0.0;
 			}
