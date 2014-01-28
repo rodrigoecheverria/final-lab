@@ -55,7 +55,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	
     if (Row < CRows && Col < CCols) 
         C[((blockIdx.y * blockDim.y + threadIdx.y) * CCols) + 
-            (blockIdx.x * blockDim.x) + threadIdx.x] = CValue;
+            (blockIdx.x * blockDim.x) + threadIdx.x] = 17 //CValue;
 }
 
 
