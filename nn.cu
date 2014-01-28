@@ -173,7 +173,7 @@ int main(int argc, char *argv[])
     cudaMemcpy(a[2], d_a[2], options.numberOfTrainingSamples * options.layerSizes[2] * sizeof(float), cudaMemcpyDeviceToHost);
     
     printMatrix(Theta[0], options.layerSizes[0], options.layerSizes[1]);
-    printMatrix(Theta[0], options.layerSizes[1], options.layerSizes[2]);
+    printMatrix(Theta[1], options.layerSizes[1], options.layerSizes[2]);
 	printMatrix(a[0], options.numberOfTrainingSamples, options.layerSizes[0]);
 	printMatrix(a[1], options.numberOfTrainingSamples, options.layerSizes[1]);
 	printMatrix(a[2], options.numberOfTrainingSamples, options.layerSizes[2]);
