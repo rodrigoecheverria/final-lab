@@ -40,7 +40,8 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	    
 		if ((threadIdx.y == 0) && (Col < BCols)) 
 			BiasRow[threadIdx.x] = B[Col];
-			
+	    else 
+			BiasRow[threadIdx.x] = 0.0;
 	    __syncthreads();
 		
 		CValue += BiasRow[threadIdx.x];
