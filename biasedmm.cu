@@ -30,7 +30,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
          __syncthreads();
 
          for (int n = 0; n < TILE_DIM; ++n) 
-            CValue += 0;//As[threadIdx.y][n] * Bs[n][threadIdx.x];
+            CValue += As[threadIdx.y][n] * Bs[n][threadIdx.x];
 
          __syncthreads();
     }
@@ -47,7 +47,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 			}
 	    __syncthreads();
 		
-		CValue = BiasRow[threadIdx.x];
+		CValue += BiasRow[threadIdx.x];
 		
 		__syncthreads();
 		
