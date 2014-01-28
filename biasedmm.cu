@@ -60,23 +60,27 @@ int main(int argc, char *argv[])
     float *d_A, *d_B, *d_C, *A, *B, *C;
     int i, N = 4;
     A = (float *) malloc (sizeof(float) * N * N);
-    B = (float *) malloc (sizeof(float) * N * N);
+    B = (float *) malloc (sizeof(float) * N * (N+1));
     C = (float *) malloc (sizeof(float) * N * N);
     cudaMalloc((void **)&d_A, N * N * sizeof(float));
-    cudaMalloc((void **)&d_B, N * N * sizeof(float));
+    cudaMalloc((void **)&d_B, N * (N+1) * sizeof(float));
     cudaMalloc((void **)&d_C, N * N * sizeof(float));
     
     for (i = 0; i < N * N; i++)
     {
-        A[i] =i; B[i] = i; C[i] = 0.0;
+        A[i] =i; C[i] = 0.0;
     }
-    
+    for (i = 0; i < N * (N+1); i++) B[i] = i;
+	
     cudaMemcpy(d_A,	A, N * N * sizeof(float), cudaMemcpyHostToDevice);	
-    cudaMemcpy(d_B,	B, N * N * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B,	B, N * (N + 1) * sizeof(float), cudaMemcpyHostToDevice);
     
     dim3 dimBlock(TILE_DIM, TILE_DIM);
     dim3 dimGrid(N / dimBlock.x, N / dimBlock.y);
-    MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,true);
+	if (argc > 1)
+		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,true);
+	else
+		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,false);
     cudaThreadSynchronize();
     
     cudaMemcpy(C, d_C, N * N * sizeof(float), cudaMemcpyDeviceToHost);
