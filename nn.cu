@@ -279,7 +279,7 @@ void readResultsIntoMatrix(const std::string fileName, float* M, const int rows,
 }
 
 void GPU_fill_rand(float *A, int nr_rows_A, int nr_cols_A) {
-    printf("Fill rand: (%d, %d)\n", nr_rows_A, nr_cols_A);
+    printf("Fill rand: (%p,%d, %d)\n", A, nr_rows_A, nr_cols_A);
     // Create a pseudo-random number generator
     curandGenerator_t prng;
     curandCreateGenerator(&prng, CURAND_RNG_PSEUDO_DEFAULT);
