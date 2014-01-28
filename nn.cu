@@ -124,6 +124,7 @@ int main(int argc, char *argv[])
 	readResultsIntoMatrix(options.resultsFile, Y, options.numberOfTrainingSamples, 
                             options.layerSizes.back());*/
     for (i = 0; i < options.numberOfLayers - 1; i++){
+	   printf ("Filling Theta[%d] of size (%d,%d)\n",i, options.layerSizes[i],options.layerSizes[i+1]);
         GPU_fill_rand(d_Theta[i], options.layerSizes[i],
                         options.layerSizes[i+1]);
     }
