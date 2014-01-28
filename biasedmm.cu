@@ -1,7 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <cuda.h>
-#define TILE_DIM 16
+#define TILE_DIM 4
 
 //TRY TO PUT A SIGMOID FUNCTOR HERE !!!!
 __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols, 
@@ -61,7 +61,7 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 int main(int argc, char *argv[])
 {
     float *d_A, *d_B, *d_C, *A, *B, *C;
-    int i, N =16;
+    int i, N =4;
     A = (float *) malloc (sizeof(float) * N * N);
     B = (float *) malloc (sizeof(float) * N * (N+1));
     C = (float *) malloc (sizeof(float) * N * N);
