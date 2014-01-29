@@ -1,11 +1,28 @@
 #include <iostream>
 #include <fstream>
 #include <cuda.h>
+#include <math.h>
+
 #define TILE_DIM 4
+// Abstract base class                                                                                                                                                                                                  
+class UnaryFunction {
+public:
+  __host__ __device__ UnaryFunction() {};
+  __host__ __device__ virtual float operator() (float d) = 0;
+};
+
+class sigmoidFunc : public UnaryFunction {
+public:
+    __host__ __device__ sigmoidFunc(){};
+    __host__ __device__ virtual float operator()(float z){
+        return z + 1;
+        //return 1.0/(1.0 + exp(-z));
+    }
+};  
 
 //TRY TO PUT A SIGMOID FUNCTOR HERE !!!!
 __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols, 
-    int BRows, int BCols, int CRows, int CCols, bool addBias) 
+    int BRows, int BCols, int CRows, int CCols, bool addBias, UnaryFunction* activationFunction ) 
 {
     float CValue = 0;
     int Row = blockIdx.y * TILE_DIM + threadIdx.y;
@@ -55,7 +72,8 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	
     if (Row < CRows && Col < CCols) 
         C[((blockIdx.y * blockDim.y + threadIdx.y) * CCols) + 
-            (blockIdx.x * blockDim.x) + threadIdx.x] = CValue;
+            (blockIdx.x * blockDim.x) + threadIdx.x] = 
+            (*activationFunction)(CValue);
 }
 
 
@@ -82,10 +100,8 @@ int main(int argc, char *argv[])
     
     dim3 dimBlock(TILE_DIM, TILE_DIM);
     dim3 dimGrid((N + dimBlock.x -1) / dimBlock.x, (N  + dimBlock.y -1) / dimBlock.y);
-	if (argc > 1)
-		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,true);
-	else
-		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,false);
+    UnaryFunction* sigmoidf = new sigmoidFunc();
+		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,true,sigmoidf);
     cudaThreadSynchronize();
     
     cudaMemcpy(C, d_C, N * N * sizeof(float), cudaMemcpyDeviceToHost);
