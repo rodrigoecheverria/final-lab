@@ -37,7 +37,8 @@ __global__ void ZipMapReduceKernel(float* X, float* Y, float* R, int size,
     __syncthreads();
     
     //Zip and Map: sR <- Map(Zip(sX,sY))
-    sR[tid] = mapFunction(sX[tid],sY[tid]);
+    if (i < size) 
+        sR[tid] = mapFunction(sX[tid],sY[tid]);
     __syncthreads();
     
     //Reduce
@@ -82,7 +83,7 @@ float ZipMapReduce(float* d_X, float* d_Y, int size, MapFunction mapFunction,
 int main(int argc, char *argv[])
 {
     float *A, *B, *d_A, *d_B, C;
-    int i, N =6, M = 6;
+    int i, N =2, M = 2;
     
     A = (float *) malloc (sizeof(float) * M * N);
     B = (float *) malloc (sizeof(float) * M * N);
@@ -96,7 +97,7 @@ int main(int argc, char *argv[])
     prodFunc mapFunction;
     plusFunc reduceFunction;
     
-    C = ZipMapReduce(d_A, d_B, M*N, mapFunction, 0.0, reduceFunction);
+    C = ZipMapReduce(d_A + N, d_A + N, (M-1)*N, mapFunction, 0.0, reduceFunction);
     printf("Result: %f\n",C);
  
     cudaFree(d_A); cudaFree(d_B);

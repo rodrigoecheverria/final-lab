@@ -20,6 +20,13 @@ struct plusFunc {
         return x + y;
     }
 };
+
+struct prodFunc {
+        __host__ __device__ float operator()(float x, float y) const {
+        return x * y;
+    }
+};
+
 struct goodLogisticRegressionFunc {
         __host__ __device__ float operator()(float x, float y) const {
         return (-x * log(y));
@@ -76,6 +83,7 @@ int main(int argc, char *argv[])
     goodLogisticRegressionFunc goodLogisticRegressionf;
     badLogisticRegressionFunc badLogisticRegressionf;
     plusFunc plusf;
+    prodFunc prodf;
     
 	Options options = ParseCommandLine(argc,argv);
 	
@@ -191,16 +199,33 @@ int main(int argc, char *argv[])
 	//printMatrix(a[1], options.numberOfTrainingSamples, options.layerSizes[1]);
 	//printMatrix(Theta[1], options.layerSizes[1]+1, options.layerSizes[2]);
 	//printMatrix(a[2], options.numberOfTrainingSamples, options.layerSizes[2]);
-	printMatrix(Y,options.numberOfTrainingSamples,options.layerSizes.back());
+	//printMatrix(Y,options.numberOfTrainingSamples,options.layerSizes.back());
 	
-	J = ZipMapReduce(d_Y, d_a[options.numberOfLayers - 1], options.numberOfTrainingSamples *
-	                        options.layerSizes.back(), goodLogisticRegressionf, 0.0, plusf) -
-	    ZipMapReduce(d_Y, d_a[options.numberOfLayers - 1], options.numberOfTrainingSamples *
-	              options.layerSizes.back(), badLogisticRegressionf,0.0,plusf);
+	//Cost
+	J = ZipMapReduce(d_Y, d_a[options.numberOfLayers - 1], 
+	                 options.numberOfTrainingSamples * options.layerSizes.back(),        
+	                 goodLogisticRegressionf, 0.0, plusf) -
+	    ZipMapReduce(d_Y, d_a[options.numberOfLayers - 1], 
+	                 options.numberOfTrainingSamples * options.layerSizes.back(), 
+	                 badLogisticRegressionf,0.0,plusf);
 	              
 	J = J / options.numberOfTrainingSamples; //Average
-	printf("Cost: %f\n",J);                  
-	              
+	
+	printf("Cost: %f\n",J); 
+    
+    //Regularized cost
+	float coef = 0.0;
+	for (i = 0; i < options.numberOfLayers - 1; i++)
+	    coef += ZipMapReduce(d_Theta[i]+options.layerSizes[i+1], 
+	                         d_Theta[i]+options.layerSizes[i+1],
+	                          options.layerSizes[i] * options.layerSizes[i+1],                
+	                          prodf,0.0,plusf);
+	                          
+	J += ( coef /(2*options.numberOfTrainingSamples));
+	printf("Coef: %f\n",coef);
+	printf("Regularized cost: %f\n",J); 
+	
+	
 	//    cudaFree(d_X); cudaFree(d_B); cudaFree(d_C);    
 	return 0;
 }
@@ -339,9 +364,8 @@ float ZipMapReduce(float* d_X, float* d_Y, int size, MapFunction mapFunction,
     //Create auxiliary vector
     R = (float *) malloc (sizeof(float) * dimGrid.x);
     cudaError_t err = cudaMalloc((void **)&d_R, sizeof(float) * dimGrid.x);
-    if (err) printf ("Memory error: %d\n", err);
+
     //Reduce to vector R
-    printf ("Size: %d\n", size);
 	ZipMapReduceKernel<<<dimGrid, dimBlock>>>(d_X, d_Y, d_R, size, mapFunction, neutralElement, reduceFunction);
     cudaThreadSynchronize();
     cudaMemcpy(R, d_R, dimGrid.x * sizeof(float), cudaMemcpyDeviceToHost);
