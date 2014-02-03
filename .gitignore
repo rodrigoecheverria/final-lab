@@ -13,7 +13,7 @@
 *.a
 
 # Restricted Data files
-data_*.csv
+#data_*.csv
 
 # Temporal stuff
 *~
