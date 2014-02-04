@@ -1,11 +1,18 @@
 #include <iostream>
 #include <fstream>
 #include <cuda.h>
-#define TILE_DIM 4
+#include <math.h>
+#define TILE_DIM 8
 
-//TRY TO PUT A SIGMOID FUNCTOR HERE !!!!
+struct sigmoidFunc {
+        __host__ __device__ float operator()(float z) const {
+        return (1.0 + z);
+    }
+}; 
+
+template<typename UnaryFunction>
 __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols, 
-    int BRows, int BCols, int CRows, int CCols, bool addBias) 
+    int BRows, int BCols, int CRows, int CCols, bool addBias, UnaryFunction activationFunction ) 
 {
     float CValue = 0;
     int Row = blockIdx.y * TILE_DIM + threadIdx.y;
@@ -38,12 +45,16 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	{
 		__shared__ float BiasRow[TILE_DIM];
 	    
-		if ((threadIdx.y == 0) && (Col < BCols)) 
+		if (threadIdx.y == 0){
+		  if (Col < BCols){
 			BiasRow[threadIdx.x] = B[Col];
-			
+		  }else{
+		  	BiasRow[threadIdx.x] = 0.0;
+			}
+			}
 	    __syncthreads();
 		
-		CValue = BiasRow[threadIdx.x];
+		CValue += BiasRow[threadIdx.x];
 		
 		__syncthreads();
 		
@@ -51,47 +62,42 @@ __global__ void MatMul(float* A, float* B, float* C, int ARows, int ACols,
 	
     if (Row < CRows && Col < CCols) 
         C[((blockIdx.y * blockDim.y + threadIdx.y) * CCols) + 
-            (blockIdx.x * blockDim.x) + threadIdx.x] = CValue;
+            (blockIdx.x * blockDim.x) + threadIdx.x] = 
+            activationFunction(CValue);
 }
-
 
 // Invoke kernel
 int main(int argc, char *argv[])
 {
     float *d_A, *d_B, *d_C, *A, *B, *C;
-    int i, N =6;
-    A = (float *) malloc (sizeof(float) * N * N);
-    B = (float *) malloc (sizeof(float) * N * (N+1));
-    C = (float *) malloc (sizeof(float) * N * N);
-    cudaMalloc((void **)&d_A, N * N * sizeof(float));
-    cudaMalloc((void **)&d_B, N * (N+1) * sizeof(float));
-    cudaMalloc((void **)&d_C, N * N * sizeof(float));
+    int i, N = 3, M = 4, O = 25;
+    A = (float *) malloc (sizeof(float) * N * M);
+    B = (float *) malloc (sizeof(float) * (M+1) * O);
+    C = (float *) malloc (sizeof(float) * N * O);
+    cudaMalloc((void **)&d_A, M * N * sizeof(float));
+    cudaMalloc((void **)&d_B, (M+1) * O * sizeof(float));
+    cudaMalloc((void **)&d_C, N * O * sizeof(float));
     
-    for (i = 0; i < N * N; i++)
-    {
-        A[i] =i; C[i] = 0.0;
-    }
-    for (i = 0; i < N * (N+1); i++) B[i] = i;
+    for (i = 0; i < N * M; i++) A[i] =i;
+    for (i = 0; i < (M+1) * O; i++) B[i] = i;
+    for (i = 0; i < M * O; i++) C[i] = 0.0;
 	
-    cudaMemcpy(d_A,	A, N * N * sizeof(float), cudaMemcpyHostToDevice);	
-    cudaMemcpy(d_B,	B, N * (N + 1) * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_A,	A, N * M * sizeof(float), cudaMemcpyHostToDevice);	
+    cudaMemcpy(d_B,	B, (M+1) * O * sizeof(float), cudaMemcpyHostToDevice);
     
     dim3 dimBlock(TILE_DIM, TILE_DIM);
-    dim3 dimGrid(N / dimBlock.x, N / dimBlock.y);
-	if (argc > 1)
-		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,true);
-	else
-		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,N,N,N,N,N,false);
+    dim3 dimGrid((O + dimBlock.x -1) / dimBlock.x, (N  + dimBlock.y -1) / dimBlock.y);
+    sigmoidFunc sigmoidf;
+		MatMul<<<dimGrid, dimBlock>>>(d_A, d_B, d_C,N,M,M,O,N,O,true,sigmoidf);
     cudaThreadSynchronize();
     
-    cudaMemcpy(C, d_C, N * N * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(C, d_C, N * O * sizeof(float), cudaMemcpyDeviceToHost);
     cudaFree(d_A); cudaFree(d_B); cudaFree(d_C);
     
-    for (i = 0; i < N * N; i++)
+    for (i = 0; i < N * O; i++)
     {
-			if ((i % N) == 0) printf("\n");
+			if ((i % O) == 0) printf("\n");
 			printf("%f, ",C[i]);
     }
     return 0;
-    
 }
