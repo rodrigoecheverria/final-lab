@@ -5,6 +5,7 @@
 #include <curand.h>
 #include <math.h>
 
+#define EPSILON 0.001
 #define TILE_DIM 32
 //==============================================================================
 // SIGNATURES
@@ -39,6 +40,14 @@ struct prodFunc {
     }
 };
 
+struct sxpayFunc {
+        float p;
+		sxpayFunc(float _p) : p(_p) {}
+        __host__ __device__ float operator()(float x, float y) const {
+        return x + a*y;
+    }
+};
+
 struct goodLogisticRegressionFunc {
         __host__ __device__ float operator()(float x, float y) const {
         return (-x * log(y));
@@ -61,6 +70,13 @@ struct gradientFunc {
     }
 };
 
+struct DivideByFunc {
+        float d;
+		DivideByFunc(float _d) : d(_d) {}
+        __host__ __device__ float operator()(float x, float y) const {
+        return ((1-x) * log(1-y));
+    }
+};
 
 template<typename UnaryFunction>
 __global__ void MatMul(float* A, float* B, float* C, float* aC, int ARows, int ACols, 
@@ -127,12 +143,14 @@ int main(int argc, char *argv[])
     plusFunc plusf;
     prodFunc prodf;
     subFunc  subf;
+
     
 	Options o = ParseCommandLine(argc,argv);
-	
 	printf("Number of layers: %d\n", o.numberOfLayers);
 	
 	printf("Activation function: %s\n", o.activationFunction.c_str());
+	
+	DivideByFunc divideByNumberOfTrainingSamplesf(o.numberOfTrainingSamples);
 	//=========================================================================
 	// Allocate memory in both host and device
 	//=========================================================================
@@ -176,12 +194,12 @@ int main(int argc, char *argv[])
 	                     o.layerSizes[i+1] * sizeof(float));
 						 
 	    Delta[i] = (float *) malloc (sizeof(float) * (o.layerSizes[i] + 1) * 
-	                            (o.layerSizes[i + 1] + 1));            
+	                            o.layerSizes[i + 1]);            
 	    err = cudaMalloc((void **)&(d_Delta[i]), (o.layerSizes[i] + 1) * 
-                         (o.layerSizes[i + 1] + 1) * sizeof(float));                                 
+                         o.layerSizes[i + 1] * sizeof(float));                                 
 	                          
     }
-	 //Check the indexes of Delta[1]
+	 //Check the indexes of Delta[1] : it should be right now
 	 
 	lastDelta = o.numberOfLayers - 2;
 	delta[lastDelta] = (float *) malloc (sizeof(float) * o.numberOfTrainingSamples * 
@@ -290,40 +308,118 @@ int main(int argc, char *argv[])
     /*
 	 * BACKPROPAGATION
 	 */
+	do {
 	int lastDelta = o.numberOfLayers - 2;
 	
 	//Calculate the error in the output: delta[lastDelta] <- d_a[last] - Y
 	ZipMap(d_a[o.numberOfLayers - 1], d_Y, d_delta[lastDelta], 
 	           o.numberOfTrainingSamples * o.layerSizes.back(), subf);
 	
-    //(d_delta[lastDelta] x d_Theta_trans[1]) .* g'(z)
-    
-    Transpose(d_Theta[1], d_Theta_trans[1], o.layerSizes[1] + 1, o.layerSizes[2]);
-	
-	MatMul (d_delta[1], d_Theta_trans[1], d_delta[0],
-                o.numberOfTrainingSamples,
-                o.layerSizes[2],
-                o.layerSizes[2],
-                o.layerSizes[1] + 1);    
-   
-    ZipMap(d_z[1],       d_z[1], d_z[1],      o.numberOfTrainingSamples * (o.layerSizes[1] + 1), gradientf);
-    ZipMap(d_delta[0], d_z[1], d_delta[0], o.numberOfTrainingSamples * (o.layerSizes[1] + 1), prodf);
-	    
+    //Backpropagate the error up to the first hidden layer (the first layer has no error, it is the input)
+    //d_delta[l] <- d_delta[l+1] x d_Theta_trans[l+1]) .* g'(z[l+1])
+    //Where z is the linear combination at layer l (without activation) and g' is the derivative of the activation function
+    for (i = lastDelta - 1, i >= 0; i--)
+   {    
+		Transpose(d_Theta[i + 1], d_Theta_trans[i + 1], o.layerSizes[i + 1] + 1, o.layerSizes[i + 2]);
+		
+		//First term (d_delta[l+1] x d_Theta_trans[l+1]):
+		MatMul (d_delta[i + 1], d_Theta_trans[i + 1], d_delta[i],
+					o.numberOfTrainingSamples,
+					o.layerSizes[i + 2],
+					o.layerSizes[i + 2],
+					o.layerSizes[i + 1] + 1);    
+					
+		//Second term (g'(z[l+1]))
+		ZipMap(d_z[i + 1], d_z[i + 1], d_z[i + 1], o.numberOfTrainingSamples * (o.layerSizes[i + 1] + 1), gradientf);
+		
+		//Element wise product 
+		ZipMap(d_delta[i], d_z[i + 1], d_delta[i], o.numberOfTrainingSamples * (o.layerSizes[i + 1] + 1), prodf);
+	}    
     //UP TO THIS POINT EVERYTHING IS FINE
     
-    //Transpose(d_a[0], d_a_trans[0], o.numberOfTrainingSamples, o.layerSizes[0]+1);
-    Transpose(d_delta[0],d_delta[0], o.numberOfTrainingSamples, o.layerSizes[1]+1);
+	//Calculate the Delta (gradient to be applied in Theta_i to correct it)
+	//Delta[l] <- delta[l] x a[l]
 	
-    MatMul (d_delta[0], d_a[0], d_Delta[0],
-			    o.layerSizes[1] + 1,
-			    o.numberOfTrainingSamples,
-			    o.numberOfTrainingSamples,
-			    o.layerSizes[0] + 1);
+	Transpose(d_delta[lastDelta], d_delta[lastDelta], o.numberOfTrainingSamples, o.layerSizes.back());
+    MatMul (d_delta[lastDelta], d_a[lastDelta], d_Delta[lastDelta],
+	            o.layerSizes[lastDelta + 1],
+				o.numberOfTrainingSamples,
+				o.numberOfTrainingSamples,
+				o.layerSizes[lastDelta] + 1);
+	Transpose(d_Delta[lastDelta], d_Delta[lastDelta], o.layerSizes[lastDelta + 1], o.layerSizes[lastDelta] + 1);
+	
+	//Divide all elements in delta by the number of samples
+	ZipMap(d_Delta[lastDelta], d_Delta[lastDelta], d_Delta[lastDelta], 
+	           o.layerSizes[lastDelta + 1] * (o.layerSizes[lastDelta] + 1), divideByNumberOfTrainingSamplesf);
+	
+	for (i = lastDelta - 1, i >= 0; i--)
+   {
+		Transpose(d_delta[i], d_delta[i], o.numberOfTrainingSamples, o.layerSizes[i + 1]+1);
+		MatMul (d_delta[i] + o.numberOfTrainingSamples, d_a[i], d_Delta[i],
+					o.layerSizes[i + 1],
+					o.numberOfTrainingSamples,
+					o.numberOfTrainingSamples,
+					o.layerSizes[i] + 1);
+		Transpose(d_Delta[i], d_Delta[i], o.layerSizes[i + 1] , o.layerSizes[i] + 1);
+		//Divide all elements in delta by the number of samples
+		ZipMap(d_Delta[i], d_Delta[i], d_Delta[i], 
+	               o.layerSizes[i + 1] * (o.layerSizes[i] + 1), divideByNumberOfTrainingSamplesf);
+	}
+	
+    //cudaMemcpy(Delta[0], d_Delta[0], (o.layerSizes[0] + 1) * (o.layerSizes[1] + 1) * sizeof(float), cudaMemcpyDeviceToHost);
+    //printMatrix(Delta[0], o.layerSizes[1] + 1, o.layerSizes[0] + 1);
     
-    //Transpose(d_Delta[0], d_Delta[0], o.layerSizes[0] + 1, o.layerSizes[1] + 1);
-    cudaMemcpy(Delta[0], d_Delta[0], (o.layerSizes[0] + 1) * (o.layerSizes[1] + 1) * sizeof(float), cudaMemcpyDeviceToHost);
-    printMatrix(Delta[0], o.layerSizes[1] + 1, o.layerSizes[0] + 1);
-    
+	//Regularize Deltas
+	for (i = 0; i <= lastDelta; i++)
+	{
+		ZipMap(d_Delta[i], d_Theta[i], d_Delta[i], o.layerSizes[i + 1]  * (o.layerSizes[i] + 1), 
+														   sxpayFunc(1/o.numberOfTrainingSamples));
+	}
+	
+	//Apply Deltas
+	for (i = 0, i <= lastDelta, i++)
+	{
+		ZipMap(d_Theta[i], d_Delta[i], d_Theta[i], o.layerSizes[i + 1]  * (o.layerSizes[i] + 1), plusf)
+	}
+	
+	//Recalculate cost
+	for(i = 0; i < o.numberOfLayers - 1; i++)
+	{ 
+		CalculateActivation(d_a[i], d_Theta[i], d_z[i+1], d_a[i+1],
+                                     o.numberOfTrainingSamples,
+                                     o.layerSizes[i],
+                                     o.layerSizes[i],
+                                     o.layerSizes[i+1],
+                                     sigmoidf);
+    }
+	
+	//Cost
+	J2 = ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
+					           o.numberOfTrainingSamples * o.layerSizes.back(),        
+	                           goodLogisticRegressionf, 0.0, plusf) -
+	     ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
+	                           o.numberOfTrainingSamples * o.layerSizes.back(), 
+	                           badLogisticRegressionf,0.0,plusf);
+	              
+	J2 = J2 / o.numberOfTrainingSamples; //Average
+	    
+    //Regularized cost 
+	float coef = 0.0;
+	for (i = 0; i < o.numberOfLayers - 1; i++)
+	    coef += ZipMapReduce(d_Theta[i]+o.layerSizes[i+1], 
+	                                       d_Theta[i]+o.layerSizes[i+1],
+	                                       o.layerSizes[i] * o.layerSizes[i+1],                
+	                                       prodf, 0.0, sxpayFunc(alpha));
+	                          
+	J2 += ( coef /(2*o.numberOfTrainingSamples));
+	printf("New regularized cost: %f\n", J); 
+	
+	float diff = J - J2;
+	
+	J = J2;
+	j++;
+	} while (diff < EPSILON || j >= o.maxIterations);
+	
     //==========================================================================
 	// FREE MEMORY
 	//==========================================================================     
