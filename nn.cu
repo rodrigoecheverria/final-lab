@@ -15,6 +15,12 @@ struct sigmoidFunc {
     }
 };
 
+struct dummyFunc {
+        __host__ __device__ float operator()(float z) const {
+        return 0.0;
+    }
+};
+
 struct plusFunc {
         __host__ __device__ float operator()(float x, float y) const {
         return x + y;
@@ -48,16 +54,13 @@ struct badLogisticRegressionFunc {
 struct gradientFunc {
         __host__ __device__ float operator()(float x, float y) const {
         sigmoidFunc sigmoidf;
-        if (x > 0.99999999 && x < 1.00000001)
+        if (x > 0.99999999 && x < 1.00000001) // x == 1
             return (x);
         else
             return (sigmoidf(x) * (1-sigmoidf(y)));
-        /*if (y > 0.99999999 && y < 1.00000001)
-            return (x);
-        else
-            return ((x) * sigmoidf(y) * (1-sigmoidf(y)));*/
     }
 };
+
 
 template<typename UnaryFunction>
 __global__ void MatMul(float* A, float* B, float* C, float* aC, int ARows, int ACols, 
@@ -111,6 +114,7 @@ void printMatrix(float *M, int rows, int columns);
 int main(int argc, char *argv[])
 {
     int i,l;
+	int lastDelta;
     float *X, *Y, *d_Y, **Theta, **Theta_trans, **d_Theta, **d_Theta_trans, 
           **z, **d_z, **a, **d_a, **a_trans, **d_a_trans, **delta, **d_delta, 
           **Delta, **d_Delta, J; 
@@ -170,25 +174,29 @@ int main(int argc, char *argv[])
 	    err = cudaMalloc((void **)&(d_Theta_trans[i]), 
 	                     o.numberOfTrainingSamples * 
 	                     o.layerSizes[i+1] * sizeof(float));
-	                                    
+						 
+	    Delta[i] = (float *) malloc (sizeof(float) * (o.layerSizes[i] + 1) * 
+	                            (o.layerSizes[i + 1] + 1));            
+	    err = cudaMalloc((void **)&(d_Delta[i]), (o.layerSizes[i] + 1) * 
+                         (o.layerSizes[i + 1] + 1) * sizeof(float));                                 
 	                          
     }
-    delta[1] = (float *) malloc (sizeof(float) * o.numberOfTrainingSamples * 
-	                                 o.layerSizes[2]);
-    err = cudaMalloc((void **)&(d_delta[1]), o.numberOfTrainingSamples * 
-	                     o.layerSizes[2] * sizeof(float));
-	delta[0] = (float *) malloc (sizeof(float) * o.numberOfTrainingSamples * 
-	                                 (o.layerSizes[1] + 1));
-    err = cudaMalloc((void **)&(d_delta[0]), o.numberOfTrainingSamples * 
-	                     (o.layerSizes[1] + 1) * sizeof(float)); 
-	                     
-	Delta[0] = (float *) malloc (sizeof(float) * (o.layerSizes[0] + 1) * 
-	                            (o.layerSizes[1] + 1));            
-	err = cudaMalloc((void **)&(d_Delta[0]), (o.layerSizes[0] + 1) * 
-                         (o.layerSizes[1] + 1) * sizeof(float)); 
-    //PUT DELTA[1] !!!
-    
-    
+	 //Check the indexes of Delta[1]
+	 
+	lastDelta = o.numberOfLayers - 2;
+	delta[lastDelta] = (float *) malloc (sizeof(float) * o.numberOfTrainingSamples * 
+	                                 o.layerSizes.back());
+    err = cudaMalloc((void **)&(d_delta[lastDelta]), o.numberOfTrainingSamples * 
+	                     o.layerSizes.back() * sizeof(float));
+						 
+	for (i = 0; i < lastDelta; i++)
+	{
+		delta[i] = (float *) malloc (sizeof(float) * o.numberOfTrainingSamples * 
+										 (o.layerSizes[i+1] + 1));
+		err = cudaMalloc((void **)&(d_delta[i]), o.numberOfTrainingSamples * 
+							 (o.layerSizes[i+1] + 1) * sizeof(float)); 
+	}
+	
     for (l = 0; l < o.numberOfLayers; l++) 
     {
         //linear comb for each neuron
@@ -221,8 +229,10 @@ int main(int argc, char *argv[])
                         o.layerSizes[0]);
 	readResultsIntoMatrix(o.resultsFile, Y, o.numberOfTrainingSamples, 
                             o.layerSizes.back());
-    //for (i = 0; i < o.numberOfLayers - 1; i++)
-    //    GPU_fill_rand(d_Theta[i], o.layerSizes[i] + 1, o.layerSizes[i+1]);
+    for (i = 0; i < o.numberOfLayers - 1; i++)
+        GPU_fill_rand(d_Theta[i], o.layerSizes[i] + 1, o.layerSizes[i+1]);
+	
+	/* Force values
 	readCsvIntoMatrix("data_theta0.csv", Theta[0], o.layerSizes[0] + 1, 
                         o.layerSizes[1]);
 	readCsvIntoMatrix("data_theta1.csv", Theta[1], o.layerSizes[1] + 1, 
@@ -230,25 +240,31 @@ int main(int argc, char *argv[])
     cudaMemcpy(d_Theta[0], Theta[0], (o.layerSizes[0] + 1) * o.layerSizes[1] * 
                sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_Theta[1], Theta[1], (o.layerSizes[1] + 1) * o.layerSizes[2] * 
-               sizeof(float), cudaMemcpyHostToDevice);
+               sizeof(float), cudaMemcpyHostToDevice); */
                         
 	//==========================================================================
 	// COMPUTE
 	//==========================================================================
 	printf ("Computing ----------------------------------------------------\n");
 	//Feed the X to the first activation function: d_a[0]
-	//Fedd the Y
-	cudaMemcpy(d_a[0], X, o.numberOfTrainingSamples * 
-	            o.layerSizes[0] * sizeof(float), cudaMemcpyHostToDevice);
-	cudaMemcpy(d_Y, Y, o.numberOfTrainingSamples * 
-	           o.layerSizes.back() * sizeof(float), cudaMemcpyHostToDevice);
+	cudaMemcpy(d_a[0], X, o.numberOfTrainingSamples * o.layerSizes[0] * 
+	                   sizeof(float), cudaMemcpyHostToDevice);
+	//Feed the Y
+	cudaMemcpy(d_Y, Y, o.numberOfTrainingSamples * o.layerSizes.back() * 
+	                   sizeof(float), cudaMemcpyHostToDevice);
 	         
-	dim3 dimBlock(TILE_DIM, TILE_DIM);
+	//dim3 dimBlock(TILE_DIM, TILE_DIM);
 	// d_a[1] = d_a[0] x d_Theta[0]
 	//multiplication scope, so I can reuse (redeclare) dimGrid ;)
 	for(i = 0; i < o.numberOfLayers - 1; i++)
 	{ 
-        dim3 dimGrid((o.layerSizes[i+1] + dimBlock.x - 1)/ dimBlock.x, 
+		CalculateActivation(d_a[i], d_Theta[i], d_z[i+1], d_a[i+1],
+                                     o.numberOfTrainingSamples,
+                                     o.layerSizes[i],
+                                     o.layerSizes[i],
+                                     o.layerSizes[i+1],
+                                     sigmoidf);
+        /*dim3 dimGrid((o.layerSizes[i+1] + dimBlock.x - 1)/ dimBlock.x, 
                      (o.numberOfTrainingSamples + dimBlock.y - 1)/ dimBlock.y);
                      
         MatMul<<<dimGrid, dimBlock>>>(d_a[i], d_Theta[i], d_z[i+1], d_a[i+1],
@@ -259,7 +275,7 @@ int main(int argc, char *argv[])
                                         o.numberOfTrainingSamples,
                                         o.layerSizes[i+1],
                                         true, sigmoidf);
-        cudaThreadSynchronize();
+        cudaThreadSynchronize();*/
     }
     //cudaMemcpy(z[1], d_z[1], o.numberOfTrainingSamples * (o.layerSizes[1]+1) * sizeof(float), cudaMemcpyDeviceToHost);
     //printMatrix(z[1], o.numberOfTrainingSamples, o.layerSizes[1]+1);
@@ -309,23 +325,23 @@ int main(int argc, char *argv[])
 	
 	//Cost
 	J = ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
-	                 o.numberOfTrainingSamples * o.layerSizes.back(),        
-	                 goodLogisticRegressionf, 0.0, plusf) -
-	    ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
-	                 o.numberOfTrainingSamples * o.layerSizes.back(), 
-	                 badLogisticRegressionf,0.0,plusf);
+					           o.numberOfTrainingSamples * o.layerSizes.back(),        
+	                           goodLogisticRegressionf, 0.0, plusf) -
+	     ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
+	                           o.numberOfTrainingSamples * o.layerSizes.back(), 
+	                           badLogisticRegressionf,0.0,plusf);
 	              
 	J = J / o.numberOfTrainingSamples; //Average
 	
 	printf("Cost: %f\n",J); 
     
-    //Regularized cost
+    //Regularized cost 
 	float coef = 0.0;
 	for (i = 0; i < o.numberOfLayers - 1; i++)
 	    coef += ZipMapReduce(d_Theta[i]+o.layerSizes[i+1], 
-	                         d_Theta[i]+o.layerSizes[i+1],
-	                          o.layerSizes[i] * o.layerSizes[i+1],                
-	                          prodf,0.0,plusf);
+	                                       d_Theta[i]+o.layerSizes[i+1],
+	                                       o.layerSizes[i] * o.layerSizes[i+1],                
+	                                       prodf, 0.0, plusf);
 	                          
 	J += ( coef /(2*o.numberOfTrainingSamples));
 	printf("Coef: %f\n",coef);
@@ -335,8 +351,10 @@ int main(int argc, char *argv[])
 	 * BACKPROPAGATION
 	 */
 	int lastDelta = o.numberOfLayers - 2;
+	
+	//Calculate the error in the output: delta[lastDelta] <- d_a[last] - Y
 	ZipMap(d_a[o.numberOfLayers - 1], d_Y, d_delta[lastDelta], 
-	       o.numberOfTrainingSamples *  o.layerSizes.back(), subf);
+	           o.numberOfTrainingSamples * o.layerSizes.back(), subf);
 	       
 	//cudaMemcpy(delta[lastDelta], d_delta[lastDelta], o.numberOfTrainingSamples * 
 	//           o.layerSizes.back() * sizeof(float), cudaMemcpyDeviceToHost);
@@ -352,7 +370,13 @@ int main(int argc, char *argv[])
     //cudaMemcpy(Theta_trans[1], d_Theta_trans[1],  (o.layerSizes[1] + 1) * 
     //           o.layerSizes[2] * sizeof(float), cudaMemcpyDeviceToHost);
 	//printMatrix(Theta_trans[1], o.layerSizes[2], o.layerSizes[1]+1);
-    {
+	
+	MatMul (d_delta[1], d_Theta_trans[1], d_delta[0],
+                o.numberOfTrainingSamples,
+                o.layerSizes[2],
+                o.layerSizes[2],
+                o.layerSizes[1] + 1);
+    /*{
     dim3 dimGrid((o.layerSizes[1] + 1 + dimBlock.x - 1)/ dimBlock.x, 
                   (o.numberOfTrainingSamples + dimBlock.y - 1)/ dimBlock.y);
                 
@@ -366,14 +390,14 @@ int main(int argc, char *argv[])
                                   o.layerSizes[1] + 1,
                                   false, sigmoidf); //dummy functor
     cudaThreadSynchronize();
-    }
+    }*/
     	
 	/*cudaMemcpy(delta[0], d_delta[0], o.numberOfTrainingSamples * 
 	          (o.layerSizes[1]+1) * sizeof(float), cudaMemcpyDeviceToHost);
     printMatrix(delta[0], o.numberOfTrainingSamples, o.layerSizes[1]+1);*/
     
    
-    ZipMap(d_z[1], d_z[1], d_z[1], o.numberOfTrainingSamples * (o.layerSizes[1]+1),gradientf);
+    ZipMap(d_z[1], d_z[1], d_z[1], o.numberOfTrainingSamples * (o.layerSizes[1]+1), gradientf);
     ZipMap(d_delta[0], d_z[1], d_delta[0], 
 	       o.numberOfTrainingSamples *  (o.layerSizes[1] + 1), prodf);
 	
@@ -398,7 +422,12 @@ int main(int argc, char *argv[])
     //cudaMemcpy(a_trans[0], d_a_trans[0], o.numberOfTrainingSamples 
     //           * o.layerSizes[0] * sizeof(float), cudaMemcpyDeviceToHost);
     //printMatrix(a_trans[0], o.layerSizes[0], o.numberOfTrainingSamples);
-    {
+    MatMul (d_delta[0], d_a[0], d_Delta[0],
+			    o.layerSizes[1] + 1,
+			    o.numberOfTrainingSamples,
+			    o.numberOfTrainingSamples,
+			    o.layerSizes[0] + 1);
+	/*{
     dim3 dimGrid((o.layerSizes[0] + 1 + dimBlock.x - 1)/ dimBlock.x, 
                  (o.layerSizes[1] + 1 + dimBlock.y - 1)/ dimBlock.y);
                 
@@ -412,7 +441,7 @@ int main(int argc, char *argv[])
                                   o.layerSizes[0] + 1,
                                   false, sigmoidf); //dummy functor
     cudaThreadSynchronize();
-    }
+    }*/
     
     //Transpose(d_Delta[0], d_Delta[0], o.layerSizes[0] + 1, o.layerSizes[1] + 1);
     cudaMemcpy(Delta[0], d_Delta[0], (o.layerSizes[0] + 1) * (o.layerSizes[1] + 1) * sizeof(float), cudaMemcpyDeviceToHost);
@@ -470,7 +499,7 @@ struct Options ParseCommandLine(int argc, char *argv[])
 	
 	std::vector<std::string> allowedActivationFunctions;
 		allowedActivationFunctions.push_back("sigmoid");
-		allowedActivationFunctions.push_back("htan");
+		//allowedActivationFunctions.push_back("htan"); 
 	TCLAP::ValuesConstraint<std::string> allowedValsActivationFunction( 
 	    allowedActivationFunctions );
 	
@@ -568,9 +597,30 @@ void printMatrix(float *M, int rows, int columns)
 	    printf("\n");
 	} 
 }
-//==============================================================================
+//=============================================================================
 // KERNELS WRAPPER FUNCTIONS
-//==============================================================================
+//=============================================================================
+template<typename UnaryFunction>
+void CalculateActivation(float* A, float* B, float* C, float* aC, int ARows, int ACols,  int BRows, int BCols,
+									UnaryFunction activationFunction )
+{
+	dim3 dimBlock(TILE_DIM, TILE_DIM);
+	dim3 dimGrid((BCols + dimBlock.x - 1)/ dimBlock.x, (ARows + dimBlock.y - 1)/ dimBlock.y);
+                     
+    MatMul<<<dimGrid, dimBlock>>>(A, B, C, aC, ARows, ACols, BRows, BCols, ARows, BCols, true, activationFunction);
+    cudaThreadSynchronize();
+}
+
+void MatMul(float* A, float* B, float* C, int ARows, int ACols,  int BRows, int BCols)
+{
+    dummyFunc dummyf;
+	dim3 dimBlock(TILE_DIM, TILE_DIM);
+	dim3 dimGrid((BCols + dimBlock.x - 1)/ dimBlock.x, (ARows + dimBlock.y - 1)/ dimBlock.y);
+                     
+    MatMul<<<dimGrid, dimBlock>>>(A, B, C, NULL, ARows, ACols, BRows, BCols, ARows, BCols, false, dummyf);
+    cudaThreadSynchronize();
+}
+									   
 template<typename MapFunction,
          typename ReduceFunction>
 float ZipMapReduce(float* d_X, float* d_Y, int size, MapFunction mapFunction, 
@@ -589,12 +639,7 @@ float ZipMapReduce(float* d_X, float* d_Y, int size, MapFunction mapFunction,
 	                                          neutralElement, reduceFunction);
     cudaThreadSynchronize();
     cudaMemcpy(R, d_R, dimGrid.x * sizeof(float), cudaMemcpyDeviceToHost);
-    /*printf("Reduced to %d values: \n", dimGrid.x);
-    for (int i = 0; i < dimGrid.x; i++)
-    {
-        printf("%f, ", R[i]);
-    }
-    printf("\n");*/
+
     //Reduce remaining values in host
     for (int i = 0; i < dimGrid.x; i++)
         r = reduceFunction(r, R[i]);
@@ -622,7 +667,7 @@ void Transpose(float* d_A, float* d_B, int rows, int cols)
 // KERNELS
 //==============================================================================
 template<typename UnaryFunction>
-__global__ void MatMul(float* A, float* B, float* C, float* aC, int ARows, int ACols, 
+__global__ void MatMulKernel(float* A, float* B, float* C, float* aC, int ARows, int ACols, 
                        int BRows, int BCols, int CRows, int CCols, bool addBias, 
                        UnaryFunction activationFunction ) 
 {
