@@ -70,7 +70,7 @@ struct Options
 struct Options ParseCommandLine(int argc, char *argv[]);
 void readCsvIntoMatrix(const std::string fileName, float* M, const int rows, 
                         const int columns);
-void readResultsIntoMatrix(const std::string fileName, float* M, const int rows, 
+void readResultsIntoMatrix( const std::string fileName, float* M, const int rows, 
                             const int columns);
 void GPU_fill_rand(float *A, int nr_rows_A, int nr_cols_A);
 void printMatrix(float *M, int rows, int columns);
