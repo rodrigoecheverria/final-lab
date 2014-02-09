@@ -5,7 +5,7 @@
 #include <curand.h>
 #include <math.h>
 
-#define EPSILON 0.001
+#define EPSILON 0.00001
 #define TILE_DIM 32
 //=============================================================================
 // FUNCTORS
@@ -44,7 +44,7 @@ struct sxpayFunc {
         float p;
 		sxpayFunc(float _p) : p(_p) {}
         __host__ __device__ float operator()(float x, float y) const {
-        return x + a*y;
+        return x + p*y;
     }
 };
 
@@ -74,23 +74,27 @@ struct DivideByFunc {
         float d;
 		DivideByFunc(float _d) : d(_d) {}
         __host__ __device__ float operator()(float x, float y) const {
-        return ((1-x) * log(1-y));
+        return (x/d);
     }
 };
 
 //=============================================================================
 // SIGNATURES
 //=============================================================================
-void MatMul(float* A, float* B, float* C, int ARows, int ACols,  int BRows, int BCols);
+
+void MatMul(float* A, float* B, float* C, int ARows, int ACols,  int BRows, 
+            int BCols);
 
 template<typename UnaryFunction>
-void CalculateActivation(float* A, float* B, float* C, float* aC, int ARows, int ACols,  int BRows, int BCols,
-									UnaryFunction activationFunction);
+void CalculateActivation(float* A, float* B, float* C, float* aC, int ARows, 
+                         int ACols, int BRows, int BCols, bool addBias,
+                         UnaryFunction activationFunction);
 
 template<typename UnaryFunction>
-__global__ void MatMul(float* A, float* B, float* C, float* aC, int ARows, int ACols, 
-                                   int BRows, int BCols, int CRows, int CCols, bool addBias, 
-                                   UnaryFunction activationFunction );
+__global__ void MatMulKernel(float* A, float* B, float* C, float* aC, int ARows, 
+                             int ACols, int BRows, int BCols, int CRows, 
+                             int CCols, bool addBias, 
+                             UnaryFunction activationFunction );
                        
 template<typename MapFunction,
          typename ReduceFunction>                       
@@ -102,14 +106,15 @@ __global__ void ZipMapReduceKernel(float* X, float* Y, float* R, int size,
 template<typename MapFunction,
               typename ReduceFunction>                                                           
 float ZipMapReduce(float* d_X, float* d_Y, int size, MapFunction mapFunction, 
-                             float neutralElement, ReduceFunction reduceFunction);
+                   float neutralElement, ReduceFunction reduceFunction);
  
 template<typename MapFunction>                   
 __global__ void ZipMapKernel(float* X, float* Y, float* R, int size, 
-                                            MapFunction mapFunction);
+                             MapFunction mapFunction);
                              
 template<typename MapFunction>                             
-void ZipMap(float* d_X, float* d_Y, float* d_R, int size, MapFunction mapFunction); 
+void ZipMap(float* d_X, float* d_Y, float* d_R, int size, 
+            MapFunction mapFunction); 
 
 __global__ void TransposeKernel(float *d_A, float *d_At, int rows, int cols);
 
@@ -128,13 +133,14 @@ struct Options
 	std::string samplesFile;
 	std::string resultsFile;
 	int numberOfTrainingSamples;
-	int maxIterations
+	int maxIterations;
+	float alpha;
 };
 
 struct Options ParseCommandLine(int argc, char *argv[]);
 
 void readCsvIntoMatrix(const std::string fileName, float* M, const int rows, 
-                                  const int columns);
+                       const int columns, bool addBiasColumn = false);
 								  
 void readResultsIntoMatrix(const std::string fileName, float* M, const int rows, 
                                        const int columns);
@@ -152,10 +158,11 @@ int main(int argc, char *argv[])
 {
     int i,l,j;
 	int lastDelta;
-    float *X, *Y, *d_Y, **Theta, **Theta_trans, **d_Theta, **d_Theta_trans, 
-          **z, **d_z, **a, **d_a, **a_trans, **d_a_trans, **delta, **d_delta, 
-          **Delta, **d_Delta, J, J2; 
+    float *X, *Y, *d_Y, **Theta, **d_Theta, **d_Theta_trans, 
+          **d_z, **d_a, **d_a_trans, **d_delta, 
+          **d_Delta, J, J2, diff; 
     //d_Theta and d_a are host vectors of pointers to device memory!
+    
     cudaError_t err;
     sigmoidFunc sigmoidf;
     goodLogisticRegressionFunc goodLogisticRegressionf;
@@ -176,31 +183,34 @@ int main(int argc, char *argv[])
 	// Allocate memory in both host and device
 	//=========================================================================
 	X = (float *) malloc (sizeof(float) * o.numberOfTrainingSamples * 
-	                      o.layerSizes[0]);
+	                      (o.layerSizes[0] + 1));
 	Y = (float *) malloc (sizeof(float) * o.numberOfTrainingSamples * 
 	                      o.layerSizes.back());
 	cudaMalloc((void **) &d_Y, o.numberOfTrainingSamples * o.layerSizes.back() * 
                sizeof(float));
                
-	d_Theta          = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));
+    Theta         = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));          
+	d_Theta       = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));
 	d_Theta_trans = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));
-	d_delta           = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));
-	d_Delta          = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));
-	d_z                = (float **) malloc (o.numberOfLayers * sizeof(float*));
-	d_a               = (float **) malloc (o.numberOfLayers * sizeof(float*));
+	d_delta       = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));
+	d_Delta       = (float **) malloc ((o.numberOfLayers - 1) * sizeof(float*));
+	d_z           = (float **) malloc (o.numberOfLayers * sizeof(float*));
+	d_a           = (float **) malloc (o.numberOfLayers * sizeof(float*));
 	d_a_trans     = (float **) malloc (o.numberOfLayers * sizeof(float*));
    
 	for (i = 0; i < o.numberOfLayers - 1; i++)
 	{      
+	    Theta[i] = (float *) malloc (sizeof(float) * (o.layerSizes[i] + 1) * 
+                         o.layerSizes[i+1]);
         err = cudaMalloc((void **)&(d_Theta[i]), (o.layerSizes[i] + 1) * 
-                o.layerSizes[i+1] * sizeof(float)); //+1 is the bias row	    
+                         o.layerSizes[i+1] * sizeof(float)); 
 	    err = cudaMalloc((void **)&(d_Theta_trans[i]), 
 	                     o.numberOfTrainingSamples * 
 	                     o.layerSizes[i+1] * sizeof(float));
 	    err = cudaMalloc((void **)&(d_Delta[i]), (o.layerSizes[i] + 1) * 
-                         o.layerSizes[i + 1] * sizeof(float));                                          
+                         o.layerSizes[i + 1] * sizeof(float));         
     }
-	 //Check the indexes of Delta[1] : it should be right now
+    //Check the indexes of Delta[1] : it should be right now
 	 
 	lastDelta = o.numberOfLayers - 2;
     err = cudaMalloc((void **)&(d_delta[lastDelta]), o.numberOfTrainingSamples * 
@@ -214,18 +224,20 @@ int main(int argc, char *argv[])
 	
     for (l = 0; l < o.numberOfLayers; l++) 
     {
+        int spaceForBias = (l == o.numberOfLayers - 1) ? 0 : 1;
         //linear comb for each neuron
-        err = cudaMalloc((void **)&(d_z[l]), (o.layerSizes[l] + 1) * 
+        err = cudaMalloc((void **)&(d_z[l]), o.layerSizes[l] * 
                 o.numberOfTrainingSamples * sizeof(float)); 
         if (err > 0) printf("error code: %d\n",err);
         
         //an activation for each training sample per each neuron at layer l
-        err = cudaMalloc((void **)&(d_a[l]), o.layerSizes[l] * 
+        err = cudaMalloc((void **)&(d_a[l]), (o.layerSizes[l] + spaceForBias) * 
                 o.numberOfTrainingSamples * sizeof(float));  
         if (err > 0) printf("error code: %d\n",err);
         
-        //an activation (transposed) for each training sample per each neuron at layer l
-        err = cudaMalloc((void **)&(d_a_trans[l]), o.layerSizes[l] * 
+        //an activation (transposed) for each training sample per each neuron at 
+        //layer l
+        err = cudaMalloc((void **)&(d_a_trans[l]), (o.layerSizes[l] + spaceForBias) * 
                 o.numberOfTrainingSamples * sizeof(float));  
         if (err > 0) printf("error code: %d\n",err);
         
@@ -235,13 +247,14 @@ int main(int argc, char *argv[])
 	// INITIALIZE VALUES
 	//==========================================================================
 	readCsvIntoMatrix(o.samplesFile, X, o.numberOfTrainingSamples, 
-                        o.layerSizes[0]);
+                        o.layerSizes[0],true);
 	readResultsIntoMatrix(o.resultsFile, Y, o.numberOfTrainingSamples, 
                             o.layerSizes.back());
-    for (i = 0; i < o.numberOfLayers - 1; i++)
-        GPU_fill_rand(d_Theta[i], o.layerSizes[i] + 1, o.layerSizes[i+1]);
+    printf("Training set read\n");
+    //for (i = 0; i < o.numberOfLayers - 1; i++)
+    //    GPU_fill_rand(d_Theta[i], o.layerSizes[i] + 1, o.layerSizes[i+1]);
 	
-	/* Force values
+	//Force values 
 	readCsvIntoMatrix("data_theta0.csv", Theta[0], o.layerSizes[0] + 1, 
                         o.layerSizes[1]);
 	readCsvIntoMatrix("data_theta1.csv", Theta[1], o.layerSizes[1] + 1, 
@@ -249,36 +262,40 @@ int main(int argc, char *argv[])
     cudaMemcpy(d_Theta[0], Theta[0], (o.layerSizes[0] + 1) * o.layerSizes[1] * 
                sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_Theta[1], Theta[1], (o.layerSizes[1] + 1) * o.layerSizes[2] * 
-               sizeof(float), cudaMemcpyHostToDevice); */
+               sizeof(float), cudaMemcpyHostToDevice);
+    printf("Theta read\n");
                         
 	//==========================================================================
 	// COMPUTE
 	//==========================================================================
 	printf ("Computing ----------------------------------------------------\n");
 	//Feed the X to the first activation function: d_a[0]
-	cudaMemcpy(d_a[0], X, o.numberOfTrainingSamples * o.layerSizes[0] * 
+	cudaMemcpy(d_a[0], X, o.numberOfTrainingSamples * (o.layerSizes[0] + 1) * 
 	                   sizeof(float), cudaMemcpyHostToDevice);
 	//Feed the Y
 	cudaMemcpy(d_Y, Y, o.numberOfTrainingSamples * o.layerSizes.back() * 
 	                   sizeof(float), cudaMemcpyHostToDevice);
-
+    
 	for(i = 0; i < o.numberOfLayers - 1; i++)
 	{ 
+	    bool addBias = (i+1 != o.numberOfLayers - 1);
 		CalculateActivation(d_a[i], d_Theta[i], d_z[i+1], d_a[i+1],
-                                     o.numberOfTrainingSamples,
-                                     o.layerSizes[i],
-                                     o.layerSizes[i],
-                                     o.layerSizes[i+1],
-                                     sigmoidf);
+                            o.numberOfTrainingSamples,
+                            o.layerSizes[i] + 1,
+                            o.layerSizes[i] + 1,
+                            o.layerSizes[i+1],
+                            addBias,
+                            sigmoidf);
     }
+	
 	
 	//Cost
 	J = ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
-					           o.numberOfTrainingSamples * o.layerSizes.back(),        
-	                           goodLogisticRegressionf, 0.0, plusf) -
-	     ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
-	                           o.numberOfTrainingSamples * o.layerSizes.back(), 
-	                           badLogisticRegressionf,0.0,plusf);
+					 o.numberOfTrainingSamples * o.layerSizes.back(),        
+	                 goodLogisticRegressionf, 0.0, plusf) -
+	    ZipMapReduce(d_Y, d_a[o.numberOfLayers - 1], 
+	                 o.numberOfTrainingSamples * o.layerSizes.back(), 
+	                 badLogisticRegressionf,0.0,plusf);
 	              
 	J = J / o.numberOfTrainingSamples; //Average
 	
@@ -288,9 +305,9 @@ int main(int argc, char *argv[])
 	float coef = 0.0;
 	for (i = 0; i < o.numberOfLayers - 1; i++)
 	    coef += ZipMapReduce(d_Theta[i]+o.layerSizes[i+1], 
-	                                       d_Theta[i]+o.layerSizes[i+1],
-	                                       o.layerSizes[i] * o.layerSizes[i+1],                
-	                                       prodf, 0.0, plusf);
+	                         d_Theta[i]+o.layerSizes[i+1],
+	                         o.layerSizes[i] * o.layerSizes[i+1],                
+	                         prodf, 0.0, plusf);
 	                          
 	J += ( coef /(2*o.numberOfTrainingSamples));
 	printf("Coef: %f\n",coef);
@@ -298,21 +315,24 @@ int main(int argc, char *argv[])
 	
     /*
 	 * BACKPROPAGATION
-	 */
+	 
+	j = 0;
 	do {
-	j = 0
 	int lastDelta = o.numberOfLayers - 2;
 	
 	//Calculate the error in the output: delta[lastDelta] <- d_a[last] - Y
 	ZipMap(d_a[o.numberOfLayers - 1], d_Y, d_delta[lastDelta], 
 	           o.numberOfTrainingSamples * o.layerSizes.back(), subf);
 	
-    //Backpropagate the error up to the first hidden layer (the first layer has no error, it is the input)
+    //Backpropagate the error up to the first hidden layer (the first layer has 
+    //no error, it is the input)
     //d_delta[l] <- d_delta[l+1] x d_Theta_trans[l+1]) .* g'(z[l+1])
-    //Where z is the linear combination at layer l (without activation) and g' is the derivative of the activation function
-    for (i = lastDelta - 1, i >= 0; i--)
-   {    
-		Transpose(d_Theta[i + 1], d_Theta_trans[i + 1], o.layerSizes[i + 1] + 1, o.layerSizes[i + 2]);
+    //Where z is the linear combination at layer l (without activation) and g' 
+    //is the derivative of the activation function
+    for (i = lastDelta - 1; i >= 0; i--)
+    {    
+		Transpose(d_Theta[i + 1], d_Theta_trans[i + 1], o.layerSizes[i + 1] + 1, 
+		          o.layerSizes[i + 2]);
 		
 		//First term (d_delta[l+1] x d_Theta_trans[l+1]):
 		MatMul (d_delta[i + 1], d_Theta_trans[i + 1], d_delta[i],
@@ -322,58 +342,81 @@ int main(int argc, char *argv[])
 					o.layerSizes[i + 1] + 1);    
 					
 		//Second term (g'(z[l+1]))
-		ZipMap(d_z[i + 1], d_z[i + 1], d_z[i + 1], o.numberOfTrainingSamples * (o.layerSizes[i + 1] + 1), gradientf);
+		ZipMap(d_z[i + 1], d_z[i + 1], d_z[i + 1], o.numberOfTrainingSamples * 
+		       (o.layerSizes[i + 1] + 1), gradientf);
 		
 		//Element wise product 
-		ZipMap(d_delta[i], d_z[i + 1], d_delta[i], o.numberOfTrainingSamples * (o.layerSizes[i + 1] + 1), prodf);
+		ZipMap(d_delta[i], d_z[i + 1], d_delta[i], o.numberOfTrainingSamples * 
+		      (o.layerSizes[i + 1] + 1), prodf);
 	}    
     //UP TO THIS POINT EVERYTHING IS FINE
-    printMatrixFromDevice(d_delta[lastDelta], o.numberOfTrainingSamples, o.layerSizes.back());
-	printMatrixFromDevice(d_a[lastDelta], o.numberOfTrainingSamples, o.layerSizes[lastDelta] + 1);
-	
+
 	//Calculate the Delta (gradient to be applied in Theta_i to correct it)
 	//Delta[l] <- delta[l] x a[l]
 	
-	Transpose(d_delta[lastDelta], d_delta[lastDelta], o.numberOfTrainingSamples, o.layerSizes.back());
+	Transpose(d_delta[lastDelta], d_delta[lastDelta], o.numberOfTrainingSamples,
+	          o.layerSizes.back());
+                          
     MatMul (d_delta[lastDelta], d_a[lastDelta], d_Delta[lastDelta],
 	            o.layerSizes[lastDelta + 1],
 				o.numberOfTrainingSamples,
 				o.numberOfTrainingSamples,
-				o.layerSizes[lastDelta] + 1);
-	Transpose(d_Delta[lastDelta], d_Delta[lastDelta], o.layerSizes[lastDelta + 1], o.layerSizes[lastDelta] + 1);
+				o.layerSizes[lastDelta]);
+                          
+	Transpose(d_Delta[lastDelta], d_Delta[lastDelta], 
+	          o.layerSizes[lastDelta + 1], o.layerSizes[lastDelta]);
 	
-	//Divide all elements in delta by the number of samples
+	//Divide all elements in delta by the number of samples                          
 	ZipMap(d_Delta[lastDelta], d_Delta[lastDelta], d_Delta[lastDelta], 
-	           o.layerSizes[lastDelta + 1] * (o.layerSizes[lastDelta] + 1), divideByNumberOfTrainingSamplesf);
-	
-	for (i = lastDelta - 1, i >= 0; i--)
-   {
-		Transpose(d_delta[i], d_delta[i], o.numberOfTrainingSamples, o.layerSizes[i + 1]+1);
+	           o.layerSizes[lastDelta + 1] * o.layerSizes[lastDelta],           
+	           divideByNumberOfTrainingSamplesf);
+	//CHECK'D                          
+	for (i = lastDelta - 1; i >= 0; i--)
+    {
+		Transpose(d_delta[i], d_delta[i], o.numberOfTrainingSamples, 
+		          o.layerSizes[i + 1] + 1);
+                              
 		MatMul (d_delta[i] + o.numberOfTrainingSamples, d_a[i], d_Delta[i],
 					o.layerSizes[i + 1],
 					o.numberOfTrainingSamples,
 					o.numberOfTrainingSamples,
-					o.layerSizes[i] + 1);
-		Transpose(d_Delta[i], d_Delta[i], o.layerSizes[i + 1] , o.layerSizes[i] + 1);
+					o.layerSizes[i]);		
+					
+		Transpose(d_Delta[i], d_Delta[i], o.layerSizes[i + 1] , 
+		          o.layerSizes[i]);
+		                 
 		//Divide all elements in delta by the number of samples
 		ZipMap(d_Delta[i], d_Delta[i], d_Delta[i], 
-	               o.layerSizes[i + 1] * (o.layerSizes[i] + 1), divideByNumberOfTrainingSamplesf);
+	               o.layerSizes[i + 1] * (o.layerSizes[i]+1), 
+	               divideByNumberOfTrainingSamplesf);
+
 	}
 	
-    //cudaMemcpy(Delta[0], d_Delta[0], (o.layerSizes[0] + 1) * (o.layerSizes[1] + 1) * sizeof(float), cudaMemcpyDeviceToHost);
-    //printMatrix(Delta[0], o.layerSizes[1] + 1, o.layerSizes[0] + 1);
-    
+	float rescue = 0.001;
+	for (i = 0; i <= 26; i++)
+        cudaMemcpy(d_Delta[1] + (o.layerSizes[2] * (o.layerSizes[1] + 1) - i), 
+        &rescue, sizeof(float), cudaMemcpyHostToDevice);
+    for (i = 0; i <=401; i++)
+        cudaMemcpy(d_Delta[0] + (o.layerSizes[1] * (o.layerSizes[0] + 1) - i), 
+        &rescue, sizeof(float), cudaMemcpyHostToDevice);
+	//printMatrixFromDevice(d_Delta[1], o.layerSizes[2] , 
+    //                          o.layerSizes[1] + 1);
+    //printMatrixFromDevice(d_Delta[0], o.layerSizes[1] , 
+    //                          o.layerSizes[0] + 1);		  
 	//Regularize Deltas
 	for (i = 0; i <= lastDelta; i++)
 	{
-		ZipMap(d_Delta[i], d_Theta[i], d_Delta[i], o.layerSizes[i + 1]  * (o.layerSizes[i] + 1), 
-														   sxpayFunc(1/o.numberOfTrainingSamples));
+		ZipMap(d_Delta[i], d_Theta[i], d_Delta[i], o.layerSizes[i + 1]  *
+		       (o.layerSizes[i] + 1), sxpayFunc(1/o.numberOfTrainingSamples)); //REVISE	
 	}
 	
 	//Apply Deltas
-	for (i = 0, i <= lastDelta, i++)
+	for (i = 0; i <= lastDelta; i++)
 	{
-		ZipMap(d_Theta[i], d_Delta[i], d_Theta[i], o.layerSizes[i + 1]  * (o.layerSizes[i] + 1), plusf)
+		ZipMap(d_Theta[i], d_Delta[i], d_Theta[i], o.layerSizes[i + 1] * 
+		       (o.layerSizes[i] + 1), plusf);
+		//printMatrixFromDevice(d_Theta[i], o.layerSizes[i + 1] , 
+        //                      o.layerSizes[i] + 1);
 	}
 	//=========================================================================
 	//Recalculate cost
@@ -402,18 +445,17 @@ int main(int argc, char *argv[])
 	float coef = 0.0;
 	for (i = 0; i < o.numberOfLayers - 1; i++)
 	    coef += ZipMapReduce(d_Theta[i]+o.layerSizes[i+1], 
-	                                       d_Theta[i]+o.layerSizes[i+1],
-	                                       o.layerSizes[i] * o.layerSizes[i+1],                
-	                                       prodf, 0.0, sxpayFunc(alpha));
-	                          
+	                         d_Theta[i]+o.layerSizes[i+1],
+	                         o.layerSizes[i] * o.layerSizes[i+1],                
+	                         prodf, 0.0, sxpayFunc(o.alpha));
 	J2 += ( coef /(2*o.numberOfTrainingSamples));
-	printf("Iteration %d: Regularized cost: %f\n", j, J2); 
+	printf("Iteration %d: Regularized cost(coef: %f): %f\n", j,coef, J2); 
 	
-	float diff = J - J2;
+	diff = J - J2;
 	
 	J = J2;
 	j++;
-	} while (diff < EPSILON || j >= o.maxIterations);
+	} while (diff > EPSILON || j <= o.maxIterations);*/
 	
 	
     //==========================================================================
@@ -474,9 +516,10 @@ struct Options ParseCommandLine(int argc, char *argv[])
     TCLAP::ValueArg<std::string> fileYArg ("y", "results", 
 	    "File containing the training results", true, "", 
 	    "file name or path", cmd);
-	 TCLAP::ValueArg<int> maxIterArg ("i","max-iterations", "Maximum number of \
+    TCLAP::ValueArg<int> maxIterArg ("i","max-iterations", "Maximum number of \
 	 iterations for the backpropagation",  false, 50, "integer", cmd);
-	 
+	TCLAP::ValueArg<float> alphaArg ("r","learning-rate", "Learning rate for \
+	the backpropagation",  false, 0.50, "float", cmd);
 	cmd.parse( argc, argv );
 	    o.numberOfLayers                = numLayersArg.getValue();
 	    o.layerSizes                         = splitToInts(layersArg.getValue(),',');
@@ -485,7 +528,7 @@ struct Options ParseCommandLine(int argc, char *argv[])
 	    o.resultsFile                         = fileYArg.getValue();
         o.numberOfTrainingSamples = numTrainingSamplesArg.getValue();
 		o.maxIterations                   = maxIterArg.getValue(); 
-        
+        o.alpha                        = alphaArg.getValue(); 
     return o;
 }
 
@@ -508,16 +551,17 @@ std::vector<int> splitToInts(const std::string &s, char delim)
 }
 
 void readCsvIntoMatrix(const std::string fileName, float* M, const int rows, 
-                        const int columns)
+                        const int columns, bool addBiasColumn)
 {
     std::ifstream ifs (fileName.c_str());
 	char dummy;
 	float x;
-	
+	int biasOffset = addBiasColumn ? 1 : 0;
 	for (int i = 0; i < rows; ++i){
+	    if (addBiasColumn) M[i * (columns + biasOffset)] = 1.0;
 		for (int j = 0; j < columns; ++j){
 			ifs >> x;
-			M[i * columns + j] = x; 
+			M[i * (columns + biasOffset) + j + biasOffset] = x; 
 			if (j < (columns - 1)) //ignore commas
 				ifs >> dummy;
 		}
@@ -540,8 +584,8 @@ void readResultsIntoMatrix(const std::string fileName, float* M, const int rows,
 
 void printMatrixFromDevice(float *M, int rows, int columns)
 {
-    float* tmp  = (float *) malloc (rows * columns  * sizeof(float));
-	cudaMemcpy(tmp, M, (rows * columns  * sizeof(float), cudaMemcpyDeviceToHost);
+    float *tmp  = (float *) malloc (sizeof(float) * rows * columns);
+	cudaMemcpy(tmp, M, rows * columns * sizeof(float), cudaMemcpyDeviceToHost);
 	printMatrix(tmp, rows, columns);
 	free(tmp);
 }
@@ -555,7 +599,7 @@ void printMatrix(float *M, int rows, int columns)
 	    printf("\n");
 	} 
     printf ("##################################################################\
-	           ################################################################## ");
+##################################################################\n ");
 }
 
 //=============================================================================
@@ -575,13 +619,12 @@ void GPU_fill_rand(float *A, int nr_rows_A, int nr_cols_A) {
 }
 
 template<typename UnaryFunction>
-void CalculateActivation(float* A, float* B, float* C, float* aC, int ARows, int ACols,  int BRows, int BCols,
-									UnaryFunction activationFunction )
+void CalculateActivation(float* A, float* B, float* C, float* aC, int ARows, int ACols,  int BRows, int BCols, bool addBias, UnaryFunction activationFunction )
 {
 	dim3 dimBlock(TILE_DIM, TILE_DIM);
 	dim3 dimGrid((BCols + dimBlock.x - 1)/ dimBlock.x, (ARows + dimBlock.y - 1)/ dimBlock.y);
                      
-    MatMul<<<dimGrid, dimBlock>>>(A, B, C, aC, ARows, ACols, BRows, BCols, ARows, BCols, true, activationFunction);
+    MatMulKernel<<<dimGrid, dimBlock>>>(A, B, C, aC, ARows, ACols, BRows, BCols, ARows, BCols, addBias, activationFunction);
     cudaThreadSynchronize();
 }
 
@@ -591,7 +634,7 @@ void MatMul(float* A, float* B, float* C, int ARows, int ACols,  int BRows, int 
 	dim3 dimBlock(TILE_DIM, TILE_DIM);
 	dim3 dimGrid((BCols + dimBlock.x - 1)/ dimBlock.x, (ARows + dimBlock.y - 1)/ dimBlock.y);
                      
-    MatMul<<<dimGrid, dimBlock>>>(A, B, C, NULL, ARows, ACols, BRows, BCols, ARows, BCols, false, dummyf);
+    MatMulKernel<<<dimGrid, dimBlock>>>(A, B, C, NULL, ARows, ACols, BRows, BCols, ARows, BCols, false, dummyf);
     cudaThreadSynchronize();
 }
 									   
@@ -663,7 +706,7 @@ __global__ void MatMulKernel(float* A, float* B, float* C, float* aC, int ARows,
 
          if (k * TILE_DIM + threadIdx.y < BRows && Col < BCols)   
             Bs[threadIdx.y][threadIdx.x] = 
-                B[(k * TILE_DIM + threadIdx.y + biasOffset) * BCols + Col]; 
+                B[(k * TILE_DIM + threadIdx.y) * BCols + Col]; 
          else      
             Bs[threadIdx.y][threadIdx.x] = 0.0;
 
@@ -676,7 +719,7 @@ __global__ void MatMulKernel(float* A, float* B, float* C, float* aC, int ARows,
     }
     if (addBias)
 	{
-		__shared__ float BiasRow[TILE_DIM];
+		/*__shared__ float BiasRow[TILE_DIM];
 	    
 		if (threadIdx.y == 0){
 		  if (Col < BCols){
@@ -685,25 +728,26 @@ __global__ void MatMulKernel(float* A, float* B, float* C, float* aC, int ARows,
 		  	BiasRow[threadIdx.x] = 0.0;
 			}
 			}
-	    __syncthreads();
+	    __syncthreads();*/
 		
-		CValue += BiasRow[threadIdx.x];
+		//CValue += BiasRow[threadIdx.x];
 		
-		__syncthreads();
+		//__syncthreads();
 		
 	}
 	
     if (Row < CRows && Col < CCols) {
         if (aC != NULL)
-            aC[Row * CCols + Col] = activationFunction(CValue);
-        C[Row * (CCols + biasOffset) + Col + biasOffset] = CValue;
+            aC[Row *  (CCols + biasOffset) + Col + biasOffset] = activationFunction(CValue);
+        C[Row * CCols + Col] = CValue;
     }
     
     if (addBias)
     {
         if (Row < CRows && (Col == 0))
         {
-            C[Row * (CCols + biasOffset) + Col] = 1.0;
+            aC[Row * (CCols + biasOffset)] = 1.0;
+            //C[Row * (CCols + biasOffset) + Col] = 1.0;
         }
     }
     
